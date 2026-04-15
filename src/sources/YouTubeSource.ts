@@ -1,91 +1,77 @@
-import ytdl from '@distube/ytdl-core';
-import ytpl from 'ytpl';
 import { Readable } from 'stream';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
+import { promisify } from 'util';
 import { AudioSource, PlaylistInfo, TrackInfo, TrackMetadata } from './AudioSource';
 import { logger } from '../utils/logger';
+
+const execFileAsync = promisify(execFile);
+
+// Args shared by all yt-dlp calls so JS challenges are solved
+const YT_DLP_BASE_ARGS = [
+  '--no-js-runtimes',
+  '--js-runtimes', `node:${process.execPath}`,
+  '--remote-components', 'ejs:github',
+];
+
+function ytdlpJson(args: string[]): Promise<string> {
+  return execFileAsync('yt-dlp', [...YT_DLP_BASE_ARGS, ...args], {
+    maxBuffer: 10 * 1024 * 1024, // 10MB — large playlists can be verbose
+  }).then(({ stdout }) => stdout);
+}
 
 export class YouTubeSource implements AudioSource {
   name = 'YouTube';
 
-  private readonly requestOptions = {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Sec-Fetch-Mode': 'navigate',
-    }
-  };
-
   canHandle(url: string): boolean {
-    return ytdl.validateURL(url) || url.includes('youtube.com') || url.includes('youtu.be') || ytpl.validateID(url);
+    return url.includes('youtube.com') || url.includes('youtu.be');
   }
 
   async getPlaylist(url: string): Promise<PlaylistInfo> {
-    try {
-      logger.info(`Getting playlist info for URL: ${url}`);
-      
-      // ytpl often fails with YouTube Mixes (RD...), so we check if it's a standard playlist first
-      const isPlaylist = ytpl.validateID(url);
-      logger.info(`Is standard playlist: ${isPlaylist}`);
+    logger.info(`Getting playlist info for URL: ${url}`);
 
-      if (isPlaylist) {
-        try {
-          const playlist = await ytpl(url, { limit: 100 });
-          const tracks: TrackInfo[] = playlist.items.map(item => ({
-            id: item.id,
-            title: item.title,
-            artist: item.author.name,
-            duration: this.parseDuration(item.duration),
-            sourceUrl: item.shortUrl
-          }));
+    // --flat-playlist: don't download, just list entries.
+    // --dump-json: one JSON object per line.
+    const raw = await ytdlpJson([
+      '--flat-playlist',
+      '--dump-json',
+      url,
+    ]);
 
-          return {
-            title: playlist.title,
-            tracks
-          };
-        } catch (plError) {
-          logger.warn(`ytpl failed to fetch playlist, falling back to single video: ${plError}`);
-        }
-      }
-
-      // Single video fallback or for Mixes where we can at least play the first track
-      const videoId = ytdl.getVideoID(url);
-      logger.info(`Fetching info for single video ID: ${videoId}`);
-      
-      const info = await ytdl.getInfo(videoId, {
-        requestOptions: this.requestOptions
+    const tracks: TrackInfo[] = raw
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const entry = JSON.parse(line);
+        return {
+          id: entry.id,
+          title: entry.title ?? entry.id,
+          artist: entry.channel ?? entry.uploader ?? 'Unknown',
+          duration: entry.duration ?? 0,
+          sourceUrl: entry.webpage_url ?? `https://www.youtube.com/watch?v=${entry.id}`,
+        };
       });
 
-      const track: TrackInfo = {
-        id: videoId,
-        title: info.videoDetails.title,
-        artist: info.videoDetails.author.name,
-        duration: parseInt(info.videoDetails.lengthSeconds),
-        sourceUrl: `https://www.youtube.com/watch?v=${videoId}`
-      };
-
-      return {
-        title: info.videoDetails.title,
-        tracks: [track]
-      };
-    } catch (error) {
-      logger.error('Failed to get playlist info:', error);
-      throw error;
+    if (tracks.length === 0) {
+      throw new Error(`No tracks found for URL: ${url}`);
     }
+
+    // Use playlist title if available (first entry may carry it), else first track title
+    const firstEntry = JSON.parse(raw.trim().split('\n')[0]);
+    const playlistTitle = firstEntry.playlist_title ?? firstEntry.playlist ?? tracks[0].title;
+
+    logger.info(`Loaded ${tracks.length} tracks from: ${playlistTitle}`);
+    return { title: playlistTitle, tracks };
   }
 
   async getTrackStream(trackId: string): Promise<Readable> {
     const url = `https://www.youtube.com/watch?v=${trackId}`;
     logger.info(`Spawning yt-dlp for track: ${trackId}`);
 
-    const nodePath = process.execPath;
     const proc = spawn('yt-dlp', [
-      '--no-js-runtimes',
-      '--js-runtimes', `node:${nodePath}`,
-      '--remote-components', 'ejs:github',  // solve YouTube n-challenge for unthrottled download
+      ...YT_DLP_BASE_ARGS,
       '-f', 'bestaudio',
-      '-o', '-',            // stream to stdout
+      '-o', '-',         // stream to stdout
       '--no-playlist',
       '--quiet',
       url,
@@ -104,30 +90,17 @@ export class YouTubeSource implements AudioSource {
   }
 
   async getMetadata(trackId: string): Promise<TrackMetadata> {
-    try {
-      const info = await ytdl.getInfo(trackId, {
-        requestOptions: this.requestOptions
-      });
-      return {
-        title: info.videoDetails.title,
-        artist: info.videoDetails.author.name,
-        duration: parseInt(info.videoDetails.lengthSeconds),
-        artworkUrl: info.videoDetails.thumbnails[0]?.url
-      };
-    } catch (error) {
-      logger.error(`Failed to get metadata for ${trackId}:`, error);
-      throw error;
-    }
-  }
-
-  private parseDuration(durationStr: string | null): number {
-    if (!durationStr) return 0;
-    const parts = durationStr.split(':').map(Number);
-    if (parts.length === 3) {
-      return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    } else if (parts.length === 2) {
-      return parts[0] * 60 + parts[1];
-    }
-    return parts[0] || 0;
+    const raw = await ytdlpJson([
+      '--dump-json',
+      '--no-playlist',
+      `https://www.youtube.com/watch?v=${trackId}`,
+    ]);
+    const info = JSON.parse(raw.trim());
+    return {
+      title: info.title,
+      artist: info.channel ?? info.uploader ?? 'Unknown',
+      duration: info.duration ?? 0,
+      artworkUrl: info.thumbnail,
+    };
   }
 }
