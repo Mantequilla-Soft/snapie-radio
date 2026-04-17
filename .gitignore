@@ -39,5 +39,4 @@ Thumbs.db
 # Internal docs
 internal-docs/
 
-# PM2
-ecosystem.config.json
+# PM2 ecosystem file is tracked (no secrets — env loaded from .env)
