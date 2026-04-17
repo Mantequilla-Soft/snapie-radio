@@ -1,138 +1,81 @@
-# Bot-Radio
+# Snapie Radio — DJ Console
 
-Automated audio streaming bot for Hive Hangouts LiveKit rooms. This service allows bots to join LiveKit rooms and stream audio content from various sources like YouTube playlists.
+A browser-based DJ console for [Hive Hangouts](https://hangouts.snapie.io). Log in with your Hive Keychain, pick a live room, paste any URL, and broadcast music directly from your browser tab — no bots, no VPS required.
 
-## Features
+## How it works
 
-- Join LiveKit rooms as virtual participants
-- Stream audio from YouTube playlists
-- Command-line interface for playlist management
-- PM2 process management
-- Extensible audio source architecture
-- Real-time queue management
+The browser tab **is** the DJ. It authenticates with Hive Keychain, gets a LiveKit token from the Hangouts middleware, and joins the room directly via `livekit-client`. Audio is fetched from the server-side yt-dlp proxy (which handles YouTube, SoundCloud, Vimeo, Bandcamp, and 1000+ other sites) and streamed into the room in real time.
+
+```
+Browser (DJ Console)
+  ├─ Keychain login → Hangouts API → JWT + LiveKit token
+  ├─ GET /stream?url=... → server pipes yt-dlp audio → browser <audio>
+  ├─ Web Audio API: <audio> → GainNode → MediaStreamDestination
+  └─ livekit-client publishes MediaStream into the LiveKit room
+```
+
+## Requirements
+
+- Node.js ≥ 18
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed and on `$PATH`
+- [ffmpeg](https://ffmpeg.org) installed and on `$PATH`
+- Access to a running [Hive Hangouts](https://github.com/Mantequilla-Soft/hangouts) backend
 
 ## Installation
 
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Build the project:
-   ```bash
-   npm run build
-   ```
-
-4. Configure environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your LiveKit credentials
-   ```
-
-## Usage
-
-### CLI Commands
-
 ```bash
-# Start a bot in a room with a playlist
-bot-radio start <room-name> <playlist-url>
-
-# Stop a bot in a room
-bot-radio stop <room-name>
-
-# Show status of all active bots
-bot-radio status
-
-# Show queue for a room
-bot-radio queue <room-name>
-
-# Skip current track
-bot-radio skip <room-name>
-
-# Pause/resume playback
-bot-radio pause <room-name>
-bot-radio resume <room-name>
-
-# Add playlist to queue
-bot-radio add <room-name> <playlist-url>
-
-# Remove track from queue
-bot-radio remove <room-name> <track-index>
-```
-
-### PM2 Deployment
-
-```bash
-# Start with PM2
-npm run pm2:start
-
-# Monitor processes
-pm2 monit
-
-# View logs
-pm2 logs bot-radio
-```
-
-## Development
-
-```bash
-# Run in development mode
-npm run dev
-
-# Run CLI in development
-npm run cli
-
-# Run tests
-npm test
-
-# Lint code
-npm run lint
+git clone https://github.com/Mantequilla-Soft/snapie-radio.git
+cd snapie-radio
+npm install
+cp .env.example .env
+# edit .env — see Configuration below
 ```
 
 ## Configuration
 
-Environment variables:
+Copy `.env.example` to `.env` and fill in your values:
 
-- `LIVEKIT_URL`: LiveKit server URL
-- `LIVEKIT_API_KEY`: LiveKit API key
-- `LIVEKIT_API_SECRET`: LiveKit API secret
-- `BOT_USERNAME`: Bot username
-- `BOT_PASSWORD`: Bot password
-- `LOG_LEVEL`: Logging level (debug, info, warn, error)
+| Variable | Description |
+|---|---|
+| `HANGOUTS_API_URL` | URL of your Hive Hangouts middleware (auth + LiveKit tokens) |
+| `LIVEKIT_URL` | LiveKit server WebSocket URL (passed to the browser) |
+| `PORT` | HTTP port for the DJ console server (default: 3000) |
+| `YOUTUBE_COOKIES_FILE` | *(optional)* Path to a Netscape cookies file for YouTube auth |
 
-## Architecture
+## Running
 
-The system consists of:
+```bash
+# Development
+npm run web
 
-- **BotRadioService**: Core service managing bots and rooms
-- **Audio Sources**: Modular providers for different streaming services
-- **Queue Manager**: Handles playlist and track sequencing
-- **LiveKit Integration**: Real-time audio publishing to rooms
-- **CLI Interface**: Command-line management tool
+# Production (built)
+npm run build
+npm start
+```
 
-## Audio Sources
+Open `http://localhost:3000` (or your configured port) in a browser with the **Hive Keychain** extension installed.
 
-Currently supported:
-- YouTube (videos and playlists)
+## PM2 deployment
 
-Planned:
-- Spotify
-- SoundCloud
-- Local files
+```bash
+npm run pm2:start   # start
+pm2 logs snapie-radio
+pm2 monit
+```
 
-## Contributing
+## Usage
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+1. **Login** — enter your Hive username and sign the challenge with Keychain
+2. **Pick a room** — choose from live Hive Hangouts rooms or type a room name
+3. **Add tracks** — paste any URL (YouTube playlist, SoundCloud track, Vimeo, Bandcamp…)
+4. **Go** — press Play; the console streams audio into the LiveKit room
+
+Controls: play/pause, previous, skip, volume slider, progress scrubber, per-track remove, double-click queue item to jump.
+
+## Supported audio sources
+
+Anything [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) — YouTube, SoundCloud, Vimeo, Bandcamp, Twitch VODs, Twitter/X, and 1000+ more. Paste the URL and it resolves automatically.
 
 ## License
 
-MIT License
-
-## Documentation
-
-See [internal-docs/bot-radio-whitepaper.md](internal-docs/bot-radio-whitepaper.md) for detailed technical specifications.
+MIT
