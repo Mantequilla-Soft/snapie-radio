@@ -1,118 +1,174 @@
 import 'dotenv/config';
 import express from 'express';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
 import path from 'path';
-import { BotRadioService } from './services/BotRadioService';
+import { spawn, execFile } from 'child_process';
+import { promisify } from 'util';
 import { logger } from './utils/logger';
 
+const execFileAsync = promisify(execFile);
 const app = express();
-const httpServer = createServer(app);
-const io = new Server(httpServer);
-const botService = new BotRadioService();
+const PORT = Number(process.env.PORT ?? 3000);
 
-app.use(express.json());
+// ── yt-dlp base args (cached singleton) ───────────────────────────────────────
+
+let _baseArgs: string[] | null = null;
+
+async function getBaseArgs(): Promise<string[]> {
+  if (_baseArgs !== null) return _baseArgs;
+  const args: string[] = [];
+
+  const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
+  if (cookiesFile) args.push('--cookies', cookiesFile);
+
+  args.push('--extractor-args', 'youtube:player_client=android');
+
+  try {
+    const { stdout } = await execFileAsync('yt-dlp', ['--version']);
+    const year = parseInt(stdout.trim().split('.')[0], 10);
+    if (year >= 2024) {
+      args.push(
+        '--no-js-runtimes',
+        '--js-runtimes', `node:${process.execPath}`,
+        '--remote-components', 'ejs:github',
+      );
+    }
+  } catch { /* yt-dlp not found — will fail at request time with a clear error */ }
+
+  _baseArgs = args;
+  return args;
+}
+
+// ── Static files ──────────────────────────────────────────────────────────────
+
 app.use(express.static(path.join(__dirname, '../public')));
 
-// ── Broadcast helpers ────────────────────────────────────────────────────────
+// Expose server-side config to the browser without a build step
+app.get('/config.js', (_req, res) => {
+  res.type('application/javascript');
+  res.send(`window.SNAPIE_CONFIG = ${JSON.stringify({
+    hangoutsApiUrl: process.env.HANGOUTS_API_URL ?? 'https://api.hangouts.snapie.io',
+    livekitUrl: process.env.LIVEKIT_URL ?? 'wss://livekit.3speak.tv',
+  })};`);
+});
 
-function broadcastState() {
-  io.emit('state', botService.getStatus());
-}
+// ── Audio stream proxy ─────────────────────────────────────────────────────────
+//
+// Streams any yt-dlp-supported URL as mp3 audio.
+// The browser <audio> element fetches this and plays it.
+// yt-dlp stdout → ffmpeg → response (chunked transfer encoding).
 
-// Relay all bot events to every connected browser
-botService.on('track:start', (data) => { io.emit('track:start', data); broadcastState(); });
-botService.on('track:end',   (data) => { io.emit('track:end', data);   broadcastState(); });
-botService.on('queue:update',(data) => { io.emit('queue:update', data); broadcastState(); });
-botService.on('queue:empty', (data) => { io.emit('queue:empty', data);  broadcastState(); });
-botService.on('error',       (data) => { io.emit('bot:error', data); });
+app.get('/stream', async (req, res) => {
+  const url = req.query.url as string;
+  if (!url) return void res.status(400).json({ error: 'url required' });
 
-// ── REST API ─────────────────────────────────────────────────────────────────
+  logger.info(`Stream request: ${url}`);
 
-app.post('/api/start', async (req, res) => {
-  const { room, url } = req.body;
-  if (!room || !url) return void res.status(400).json({ error: 'room and url required' });
   try {
-    await botService.startBot(room, url);
-    res.json({ ok: true });
+    const base = await getBaseArgs();
+
+    const ytdlp = spawn('yt-dlp', [
+      ...base,
+      '-f', 'bestaudio',
+      '-o', '-',
+      '--no-playlist',
+      '--quiet',
+      url,
+    ]);
+
+    const ff = spawn('ffmpeg', [
+      '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-f', 'mp3',
+      '-b:a', '192k',
+      'pipe:1',
+    ]);
+
+    ytdlp.stdout.pipe(ff.stdin);
+
+    ytdlp.stderr.on('data', (d: Buffer) => {
+      const msg = d.toString().trim();
+      if (msg) logger.warn(`yt-dlp: ${msg}`);
+    });
+
+    ff.stderr.on('data', (d: Buffer) => {
+      const msg = d.toString().trim();
+      if (msg) logger.warn(`ffmpeg: ${msg}`);
+    });
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache');
+    ff.stdout.pipe(res);
+
+    // Clean up both processes when client disconnects
+    req.on('close', () => {
+      ytdlp.kill();
+      ff.kill();
+    });
+
+    ytdlp.on('error', (err) => {
+      logger.error('yt-dlp error:', err);
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+
+    ff.on('error', (err) => {
+      logger.error('ffmpeg error:', err);
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+
   } catch (err: any) {
-    logger.error('startBot error:', err);
-    res.status(500).json({ error: err.message });
+    logger.error('Stream setup error:', err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/stop', async (req, res) => {
-  const { room } = req.body;
+// ── Playlist resolver ─────────────────────────────────────────────────────────
+//
+// Resolves any yt-dlp-supported URL (playlist or single track) to a JSON list.
+
+app.get('/api/playlist', async (req, res) => {
+  const url = req.query.url as string;
+  if (!url) return void res.status(400).json({ error: 'url required' });
+
+  logger.info(`Playlist request: ${url}`);
+
   try {
-    await botService.stopBot(room);
-    res.json({ ok: true });
+    const base = await getBaseArgs();
+    const { stdout } = await execFileAsync('yt-dlp', [
+      ...base,
+      '--flat-playlist',
+      '--dump-json',
+      url,
+    ], { maxBuffer: 10 * 1024 * 1024 });
+
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    const tracks = lines.map((line) => {
+      const entry = JSON.parse(line);
+      return {
+        id: entry.id,
+        title: entry.title ?? entry.id,
+        artist: entry.channel ?? entry.uploader ?? 'Unknown',
+        duration: entry.duration ?? 0,
+        sourceUrl: entry.webpage_url ?? `https://www.youtube.com/watch?v=${entry.id}`,
+        thumbnail: entry.thumbnails?.[0]?.url
+          ?? (entry.id ? `https://img.youtube.com/vi/${entry.id}/mqdefault.jpg` : null),
+      };
+    });
+
+    if (tracks.length === 0) return void res.status(404).json({ error: 'No tracks found' });
+
+    const first = JSON.parse(lines[0]);
+    const title = first.playlist_title ?? first.playlist ?? tracks[0].title;
+
+    res.json({ title, tracks });
   } catch (err: any) {
+    logger.error('Playlist error:', err);
     res.status(500).json({ error: err.message });
   }
 });
-
-app.post('/api/add', async (req, res) => {
-  const { room, url } = req.body;
-  if (!room || !url) return void res.status(400).json({ error: 'room and url required' });
-  try {
-    await botService.addPlaylist(room, url);
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/skip', async (req, res) => {
-  const { room } = req.body;
-  try {
-    await botService.skipTrack(room);
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/pause', async (req, res) => {
-  const { room } = req.body;
-  try {
-    await botService.pausePlayback(room);
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/resume', async (req, res) => {
-  const { room } = req.body;
-  try {
-    await botService.resumePlayback(room);
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/state', (_req, res) => res.json(botService.getStatus()));
-
-// ── WebSocket ─────────────────────────────────────────────────────────────────
-
-io.on('connection', (socket) => {
-  socket.emit('state', botService.getStatus());
-});
-
-// ── Graceful shutdown ─────────────────────────────────────────────────────────
-
-async function shutdown() {
-  logger.info('Shutting down...');
-  await botService.stop();
-  process.exit(0);
-}
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
-const PORT = Number(process.env.PORT ?? 3000);
-httpServer.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log(`\n🎵  Snapie Radio  →  http://localhost:${PORT}\n`);
 });
