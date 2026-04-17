@@ -5,20 +5,19 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="snapie-radio"
 LOCAL_BIN="$HOME/.local/bin"
 
-echo "==> snapie-radio installer"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Snapie Radio — installer"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# ── Node.js ──────────────────────────────────────────────────────────────────
+# ── Node.js ───────────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null; then
   echo "ERROR: Node.js is not installed."
-  echo "Install it via nvm (https://github.com/nvm-sh/nvm) or your system package manager, then re-run this script."
+  echo "Install it via nvm (https://github.com/nvm-sh/nvm) or your package manager, then re-run."
   exit 1
 fi
-NODE_VER=$(node -e "process.exit(parseInt(process.versions.node) < 18 ? 1 : 0)" 2>/dev/null && echo ok || echo old)
-if [ "$NODE_VER" = "old" ]; then
-  echo "ERROR: Node.js 18+ is required. Current: $(node -v)"
-  exit 1
-fi
+node -e "if(parseInt(process.versions.node)<18){process.stderr.write('ERROR: Node.js 18+ required. Got: '+process.version+'\n');process.exit(1)}"
 echo "[✓] Node.js $(node -v)"
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────────
@@ -29,19 +28,22 @@ if ! command -v ffmpeg &>/dev/null; then
   elif command -v brew &>/dev/null; then
     brew install ffmpeg
   else
-    echo "ERROR: Cannot install ffmpeg automatically. Please install it manually and re-run."
+    echo "ERROR: Cannot install ffmpeg automatically. Install it manually and re-run."
     exit 1
   fi
 fi
 echo "[✓] ffmpeg $(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')"
 
-# ── yt-dlp ────────────────────────────────────────────────────────────────────
+# ── yt-dlp (standalone binary — avoids pip/externally-managed-environment) ───
 if ! command -v yt-dlp &>/dev/null; then
   echo "[…] Installing yt-dlp..."
-  pip3 install yt-dlp
+  mkdir -p "$LOCAL_BIN"
+  curl -sL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o "$LOCAL_BIN/yt-dlp"
+  chmod +x "$LOCAL_BIN/yt-dlp"
+  export PATH="$LOCAL_BIN:$PATH"
 else
-  echo "[…] Updating yt-dlp to latest..."
-  pip3 install --upgrade yt-dlp --quiet
+  echo "[…] Updating yt-dlp..."
+  yt-dlp -U --quiet 2>/dev/null || true
 fi
 echo "[✓] yt-dlp $(yt-dlp --version)"
 
@@ -54,25 +56,25 @@ npm install --quiet
 echo "[…] Building..."
 npm run build
 
-# ── .env setup ───────────────────────────────────────────────────────────────
+# ── .env setup ────────────────────────────────────────────────────────────────
 if [ ! -f "$REPO_DIR/.env" ]; then
   cp "$REPO_DIR/.env.example" "$REPO_DIR/.env"
   echo ""
-  echo "[!] Created .env from .env.example — fill in your LiveKit credentials:"
-  echo "    $REPO_DIR/.env"
+  echo "[!] Created .env from .env.example"
+  echo "    Check the values in: $REPO_DIR/.env"
   echo ""
 fi
 
-# ── Shell command ─────────────────────────────────────────────────────────────
+# ── Shell command (opens the DJ console) ──────────────────────────────────────
 mkdir -p "$LOCAL_BIN"
 
 cat > "$LOCAL_BIN/$BIN_NAME" <<EOF
 #!/usr/bin/env bash
-cd "$REPO_DIR" && node dist/cli.js "\$@"
+cd "$REPO_DIR" && node dist/server.js
 EOF
 chmod +x "$LOCAL_BIN/$BIN_NAME"
 
-# Add ~/.local/bin to PATH if it isn't already
+# Add ~/.local/bin to PATH if needed
 SHELL_RC=""
 if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "$(which zsh 2>/dev/null)" ]; then
   SHELL_RC="$HOME/.zshrc"
@@ -89,13 +91,13 @@ fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " snapie-radio installed successfully!"
+echo " Snapie Radio installed!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Reload your shell, then run:"
+echo "Start the DJ console:"
 echo ""
-echo "  snapie-radio start <room-name> <youtube-playlist-url>"
+echo "  snapie-radio"
 echo ""
-echo "Example:"
-echo "  snapie-radio start my-room 'https://www.youtube.com/playlist?list=PL...'"
+echo "Then open http://localhost:3000 in your browser"
+echo "(Hive Keychain extension required)"
 echo ""

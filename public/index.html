@@ -64,7 +64,11 @@
     }
     .input:focus { border-color: var(--accent); }
     .input::placeholder { color: var(--muted); }
-    select.input { appearance: none; cursor: pointer; }
+    select.input {
+      appearance: none; cursor: pointer;
+      color-scheme: dark; /* force dark native dropdown so options are readable */
+    }
+    select.input option { background: #1c1c28; color: var(--text); }
 
     .btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
