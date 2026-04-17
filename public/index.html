@@ -631,7 +631,9 @@ async function play() {
 function pause() { audio.pause(); setUI(false); }
 
 function stop() {
-  audio.pause(); audio.src = '';
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load(); // resets media element without triggering error event
   setUI(false);
   $('p-title').textContent = 'No track loaded';
   $('p-artist').textContent = '—';
@@ -663,6 +665,7 @@ audio.addEventListener('timeupdate', () => {
 });
 
 audio.addEventListener('error', () => {
+  if (S.idx < 0 || !S.queue.length) return; // not playing — ignore (e.g. after logout/stop)
   toast('Stream error — skipping', true);
   const next = S.idx + 1;
   if (next < S.queue.length) { loadTrack(next); play(); }
