@@ -9,18 +9,27 @@ const execFileAsync = promisify(execFile);
 // Build base args depending on the installed yt-dlp version.
 // --no-js-runtimes / --js-runtimes were added in 2024; older builds don't know them.
 async function buildBaseArgs(): Promise<string[]> {
+  const args: string[] = [];
+
+  // Cookies file — required on VPS deployments where YouTube blocks data-center IPs
+  const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
+  if (cookiesFile) {
+    args.push('--cookies', cookiesFile);
+  }
+
   try {
     const { stdout } = await execFileAsync('yt-dlp', ['--version']);
     const year = parseInt(stdout.trim().split('.')[0], 10);
     if (year >= 2024) {
-      return [
+      args.push(
         '--no-js-runtimes',
         '--js-runtimes', `node:${process.execPath}`,
         '--remote-components', 'ejs:github',
-      ];
+      );
     }
   } catch { /* yt-dlp not found — will fail later with a clear message */ }
-  return []; // old version: no JS-runtime flags, falls back to yt-dlp defaults
+
+  return args;
 }
 
 let _baseArgs: string[] | null = null;
