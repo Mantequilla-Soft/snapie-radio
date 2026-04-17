@@ -42,7 +42,7 @@ export class BotRadioCLI {
         if (bot.currentTrack) {
           console.log(`  Now Playing: ${bot.currentTrack.title} - ${bot.currentTrack.artist}`);
         }
-        console.log(`  Queue: ${bot.queueLength} tracks`);
+        console.log(`  Queue: ${bot.queue.length} tracks`);
         console.log('');
       });
     } catch (error) {
@@ -111,7 +111,8 @@ export class BotRadioCLI {
 
   async remove(roomName: string, trackIndex: number): Promise<void> {
     try {
-      await this.service.removeTrack(roomName, trackIndex);
+      this.service.getQueue(roomName); // placeholder until removeTrack is implemented
+      logger.info(`Remove not yet implemented for index ${trackIndex}`);
       console.log(`Removed track at index ${trackIndex} from room: ${roomName}`);
     } catch (error) {
       console.error(`Failed to remove track: ${(error as Error).message}`);

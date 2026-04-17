@@ -109,6 +109,12 @@ export class LiveKitBot {
     }
   }
 
+  async skipCurrentTrack(): Promise<void> {
+    if (this.activeStream) {
+      this.activeStream.destroy(new Error('skipped'));
+    }
+  }
+
   async leaveRoom(): Promise<void> {
     if (this.activeStream) {
       this.activeStream.destroy();

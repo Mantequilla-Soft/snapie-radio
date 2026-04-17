@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Snapie Radio</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #08080f;
+    --surface:   rgba(255,255,255,0.04);
+    --surface2:  rgba(255,255,255,0.07);
+    --border:    rgba(255,255,255,0.08);
+    --accent:    #8b5cf6;
+    --accent2:   #ec4899;
+    --glow:      rgba(139,92,246,0.35);
+    --text:      #f1f5f9;
+    --muted:     #64748b;
+    --radius:    16px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Ambient background art ── */
+  #ambient {
+    position: fixed; inset: 0; z-index: 0;
+    background-size: cover; background-position: center;
+    filter: blur(80px) saturate(1.4) brightness(0.25);
+    transition: background-image 1.2s ease;
+    pointer-events: none;
+  }
+
+  .app { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 24px 20px 80px; }
+
+  /* ── Header ── */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 32px; flex-wrap: wrap; gap: 12px;
+  }
+  .logo { font-size: 1.3rem; font-weight: 700; letter-spacing: -0.5px; }
+  .logo span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+  .room-bar { display: flex; gap: 8px; align-items: center; }
+  .room-bar input {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 10px; padding: 8px 14px;
+    font-size: 0.9rem; width: 200px; outline: none;
+    transition: border-color 0.2s;
+  }
+  .room-bar input:focus { border-color: var(--accent); }
+  .btn-connect {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; color: #fff; border-radius: 10px; padding: 8px 18px;
+    font-size: 0.9rem; font-weight: 600; cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+  .btn-connect:hover { opacity: 0.9; }
+  .btn-connect:active { transform: scale(0.97); }
+
+  /* ── Now Playing ── */
+  .now-playing {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    display: flex; gap: 24px; align-items: center;
+    margin-bottom: 20px;
+    backdrop-filter: blur(20px);
+    transition: box-shadow 0.5s;
+  }
+  .now-playing.active { box-shadow: 0 0 40px var(--glow); }
+
+  .thumb-wrap {
+    position: relative; flex-shrink: 0;
+    width: 120px; height: 120px; border-radius: 12px; overflow: hidden;
+  }
+  .thumb-wrap img {
+    width: 100%; height: 100%; object-fit: cover;
+    transition: transform 0.4s;
+  }
+  .now-playing.active .thumb-wrap img { transform: scale(1.04); }
+
+  .thumb-wrap::after {
+    content: '';
+    position: absolute; inset: 0;
+    border-radius: 12px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+  }
+
+  /* pulsing ring when playing */
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 var(--glow); }
+    70%  { box-shadow: 0 0 0 14px rgba(139,92,246,0); }
+    100% { box-shadow: 0 0 0 0 rgba(139,92,246,0); }
+  }
+  .now-playing.active .thumb-wrap { animation: pulse-ring 2.4s ease-out infinite; }
+
+  .track-info { flex: 1; min-width: 0; }
+  .track-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); margin-bottom: 6px; }
+  .track-title { font-size: 1.25rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
+  .track-artist { font-size: 0.9rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 20px; }
+
+  .controls { display: flex; gap: 12px; align-items: center; }
+  .ctrl-btn {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 50%; width: 42px; height: 42px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 1.1rem; transition: all 0.2s;
+  }
+  .ctrl-btn:hover { background: var(--accent); border-color: var(--accent); transform: scale(1.08); }
+  .ctrl-btn:active { transform: scale(0.95); }
+  .ctrl-btn.primary {
+    width: 52px; height: 52px; font-size: 1.3rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none;
+  }
+  .ctrl-btn.primary:hover { opacity: 0.9; transform: scale(1.08); }
+
+  /* ── Equalizer bars ── */
+  .eq { display: flex; gap: 3px; align-items: flex-end; height: 24px; margin-left: 8px; }
+  .eq-bar {
+    width: 3px; background: linear-gradient(to top, var(--accent), var(--accent2));
+    border-radius: 2px;
+    animation: eq-bounce var(--d, 0.8s) ease-in-out infinite alternate;
+    transform-origin: bottom;
+  }
+  @keyframes eq-bounce { from { transform: scaleY(0.15); } to { transform: scaleY(1); } }
+  .eq-bar:nth-child(1) { height: 20px; --d: 0.7s; }
+  .eq-bar:nth-child(2) { height: 24px; --d: 0.9s; }
+  .eq-bar:nth-child(3) { height: 16px; --d: 0.6s; }
+  .eq-bar:nth-child(4) { height: 22px; --d: 1.1s; }
+  .eq-bar:nth-child(5) { height: 18px; --d: 0.8s; }
+  .eq { opacity: 0; transition: opacity 0.4s; }
+  .now-playing.active .eq { opacity: 1; }
+
+  /* ── Add to queue ── */
+  .add-section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px 24px;
+    margin-bottom: 20px; backdrop-filter: blur(20px);
+  }
+  .add-section h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+  .add-row { display: flex; gap: 10px; }
+  .url-input {
+    flex: 1; background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 10px; padding: 11px 16px;
+    font-size: 0.95rem; outline: none; transition: border-color 0.2s;
+  }
+  .url-input::placeholder { color: var(--muted); }
+  .url-input:focus { border-color: var(--accent); }
+  .btn-add {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; color: #fff; border-radius: 10px; padding: 11px 22px;
+    font-size: 0.95rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+  .btn-add:hover { opacity: 0.9; }
+  .btn-add:active { transform: scale(0.97); }
+  .btn-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── Queue ── */
+  .queue-section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden; backdrop-filter: blur(20px);
+  }
+  .queue-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+  }
+  .queue-header h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .queue-count { font-size: 0.8rem; color: var(--muted); }
+
+  .queue-list { max-height: 420px; overflow-y: auto; }
+  .queue-list::-webkit-scrollbar { width: 4px; }
+  .queue-list::-webkit-scrollbar-track { background: transparent; }
+  .queue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .queue-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+    animation: slide-in 0.25s ease;
+  }
+  @keyframes slide-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .queue-item:last-child { border-bottom: none; }
+  .queue-item:hover { background: var(--surface2); }
+  .queue-item.current { background: rgba(139,92,246,0.1); border-left: 3px solid var(--accent); }
+
+  .qi-num { color: var(--muted); font-size: 0.8rem; width: 20px; text-align: center; flex-shrink: 0; }
+  .qi-thumb {
+    width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex-shrink: 0;
+    background: var(--surface2);
+  }
+  .qi-info { flex: 1; min-width: 0; }
+  .qi-title { font-size: 0.9rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qi-artist { font-size: 0.78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qi-duration { font-size: 0.78rem; color: var(--muted); flex-shrink: 0; }
+  .qi-remove {
+    background: none; border: none; color: var(--muted);
+    cursor: pointer; font-size: 1rem; padding: 4px; border-radius: 6px;
+    transition: color 0.15s, background 0.15s; flex-shrink: 0;
+    opacity: 0;
+  }
+  .queue-item:hover .qi-remove { opacity: 1; }
+  .qi-remove:hover { color: #ef4444; background: rgba(239,68,68,0.1); }
+
+  .queue-empty {
+    padding: 48px 20px; text-align: center; color: var(--muted); font-size: 0.9rem;
+  }
+  .queue-empty span { font-size: 2rem; display: block; margin-bottom: 8px; }
+
+  /* ── Status bar ── */
+  #status-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(8,8,15,0.85); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border);
+    padding: 10px 24px; font-size: 0.8rem; color: var(--muted);
+    display: flex; align-items: center; gap: 8px; z-index: 100;
+  }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .status-dot.connected { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+  .status-dot.error { background: #ef4444; }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed; bottom: 56px; left: 50%; transform: translateX(-50%) translateY(12px);
+    background: var(--surface2); border: 1px solid var(--border);
+    backdrop-filter: blur(20px); border-radius: 10px;
+    padding: 10px 20px; font-size: 0.88rem; white-space: nowrap;
+    opacity: 0; transition: opacity 0.25s, transform 0.25s; pointer-events: none; z-index: 200;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.err { border-color: #ef4444; color: #fca5a5; }
+
+  @media (max-width: 600px) {
+    .now-playing { flex-direction: column; align-items: flex-start; }
+    .thumb-wrap { width: 100%; height: 180px; }
+    .room-bar input { width: 140px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="ambient"></div>
+
+<div class="app">
+  <header>
+    <div class="logo">🎵 <span>Snapie Radio</span></div>
+    <div class="room-bar">
+      <input id="room-input" type="text" placeholder="room name" value="" />
+      <button class="btn-connect" id="btn-start">Start Radio</button>
+    </div>
+  </header>
+
+  <!-- Now Playing -->
+  <div class="now-playing" id="now-playing">
+    <div class="thumb-wrap">
+      <img id="np-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' fill='%23111'/%3E%3Ctext x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' font-size='40' fill='%23333'%3E♪%3C/text%3E%3C/svg%3E" alt="" />
+    </div>
+    <div class="track-info">
+      <div class="track-label">Now Playing</div>
+      <div class="track-title" id="np-title">Waiting for music…</div>
+      <div class="track-artist" id="np-artist">—</div>
+      <div class="controls">
+        <button class="ctrl-btn" id="btn-skip" title="Skip">⏭</button>
+        <div class="eq">
+          <div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div>
+          <div class="eq-bar"></div><div class="eq-bar"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add to Queue -->
+  <div class="add-section">
+    <h3>Add to queue</h3>
+    <div class="add-row">
+      <input class="url-input" id="url-input" type="text" placeholder="Paste a YouTube video or playlist URL…" />
+      <button class="btn-add" id="btn-add">Add</button>
+    </div>
+  </div>
+
+  <!-- Queue -->
+  <div class="queue-section">
+    <div class="queue-header">
+      <h3>Up Next</h3>
+      <span class="queue-count" id="queue-count">0 tracks</span>
+    </div>
+    <div class="queue-list" id="queue-list">
+      <div class="queue-empty"><span>🎶</span>Queue is empty — add a YouTube URL above</div>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar">
+  <div class="status-dot" id="status-dot"></div>
+  <span id="status-text">Connecting…</span>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const socket = io();
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let activeRoom = null;
+  let state = [];   // array of RoomStatus objects from server
+
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+  const ambient     = document.getElementById('ambient');
+  const nowPlaying  = document.getElementById('now-playing');
+  const npThumb     = document.getElementById('np-thumb');
+  const npTitle     = document.getElementById('np-title');
+  const npArtist    = document.getElementById('np-artist');
+  const queueList   = document.getElementById('queue-list');
+  const queueCount  = document.getElementById('queue-count');
+  const btnStart    = document.getElementById('btn-start');
+  const btnSkip     = document.getElementById('btn-skip');
+  const btnAdd      = document.getElementById('btn-add');
+  const urlInput    = document.getElementById('url-input');
+  const roomInput   = document.getElementById('room-input');
+  const statusDot   = document.getElementById('status-dot');
+  const statusText  = document.getElementById('status-text');
+  const toast       = document.getElementById('toast');
+
+  // ── Toast ──────────────────────────────────────────────────────────────────
+  let toastTimer;
+  function showToast(msg, isErr = false) {
+    toast.textContent = msg;
+    toast.className = 'show' + (isErr ? ' err' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.className = '', 3000);
+  }
+
+  // ── Thumbnail helpers ──────────────────────────────────────────────────────
+  function thumbUrl(videoId) {
+    return `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  function render() {
+    const room = state.find(r => r.roomName === activeRoom);
+
+    // Now playing
+    const track = room?.currentTrack ?? null;
+    if (track) {
+      npTitle.textContent  = track.title;
+      npArtist.textContent = track.artist;
+      const thumb = thumbUrl(track.id);
+      npThumb.src    = thumb;
+      ambient.style.backgroundImage = `url(${thumb})`;
+      nowPlaying.classList.add('active');
+    } else {
+      npTitle.textContent  = 'Waiting for music…';
+      npArtist.textContent = '—';
+      npThumb.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' fill='%23111'/%3E%3Ctext x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' font-size='40' fill='%23333'%3E♪%3C/text%3E%3C/svg%3E";
+      ambient.style.backgroundImage = '';
+      nowPlaying.classList.remove('active');
+    }
+
+    // Queue — skip the currently playing track (index 0 is currentTrack)
+    const queue = (room?.queue ?? []).slice(room?.currentTrack ? 1 : 0);
+    queueCount.textContent = `${queue.length} track${queue.length !== 1 ? 's' : ''}`;
+
+    if (queue.length === 0) {
+      queueList.innerHTML = '<div class="queue-empty"><span>🎶</span>Queue is empty — add a YouTube URL above</div>';
+      return;
+    }
+
+    queueList.innerHTML = queue.map((t, i) => `
+      <div class="queue-item" data-id="${t.id}">
+        <span class="qi-num">${i + 1}</span>
+        <img class="qi-thumb" src="${thumbUrl(t.id)}" loading="lazy" onerror="this.style.visibility='hidden'" />
+        <div class="qi-info">
+          <div class="qi-title">${esc(t.title)}</div>
+          <div class="qi-artist">${esc(t.artist)}</div>
+        </div>
+        <span class="qi-duration">${fmtDuration(t.duration)}</span>
+        <button class="qi-remove" data-index="${i + 1}" title="Remove">✕</button>
+      </div>
+    `).join('');
+  }
+
+  function esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function fmtDuration(s) {
+    if (!s) return '';
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return `${m}:${String(sec).padStart(2,'0')}`;
+  }
+
+  // ── Socket events ──────────────────────────────────────────────────────────
+  socket.on('connect', () => {
+    statusDot.className = 'status-dot connected';
+    statusText.textContent = 'Connected';
+  });
+
+  socket.on('disconnect', () => {
+    statusDot.className = 'status-dot error';
+    statusText.textContent = 'Disconnected — reconnecting…';
+  });
+
+  socket.on('state', (newState) => {
+    state = newState;
+    // Auto-select room if only one active
+    if (!activeRoom && state.length > 0) activeRoom = state[0].roomName;
+    render();
+  });
+
+  socket.on('track:start', ({ room, track }) => {
+    if (room === activeRoom) showToast(`▶ ${track.title}`);
+  });
+
+  socket.on('bot:error', ({ room, message }) => {
+    if (room === activeRoom) showToast(`Error: ${message}`, true);
+  });
+
+  socket.on('queue:empty', ({ room }) => {
+    if (room === activeRoom) showToast('Queue finished');
+  });
+
+  // ── API helpers ────────────────────────────────────────────────────────────
+  async function api(endpoint, body) {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? 'Unknown error');
+    return data;
+  }
+
+  // ── Button handlers ────────────────────────────────────────────────────────
+  btnStart.addEventListener('click', async () => {
+    const room = roomInput.value.trim();
+    const url  = urlInput.value.trim();
+    if (!room) { showToast('Enter a room name', true); return; }
+    if (!url)  { showToast('Paste a YouTube URL', true); return; }
+
+    btnStart.disabled = true;
+    btnStart.textContent = 'Starting…';
+    try {
+      const existingRoom = state.find(r => r.roomName === room && r.active);
+      if (existingRoom) {
+        await api('/api/add', { room, url });
+        showToast('Added to queue!');
+      } else {
+        await api('/api/start', { room, url });
+        activeRoom = room;
+        showToast('Bot started!');
+      }
+      urlInput.value = '';
+    } catch (err) {
+      showToast(err.message, true);
+    } finally {
+      btnStart.disabled = false;
+      btnStart.textContent = 'Start Radio';
+    }
+  });
+
+  btnAdd.addEventListener('click', async () => {
+    const room = roomInput.value.trim() || activeRoom;
+    const url  = urlInput.value.trim();
+    if (!room) { showToast('Enter a room name', true); return; }
+    if (!url)  { showToast('Paste a YouTube URL', true); return; }
+
+    btnAdd.disabled = true;
+    btnAdd.textContent = 'Adding…';
+    try {
+      const existingRoom = state.find(r => r.roomName === room && r.active);
+      if (existingRoom) {
+        await api('/api/add', { room, url });
+      } else {
+        await api('/api/start', { room, url });
+        activeRoom = room;
+      }
+      showToast('Added to queue!');
+      urlInput.value = '';
+    } catch (err) {
+      showToast(err.message, true);
+    } finally {
+      btnAdd.disabled = false;
+      btnAdd.textContent = 'Add';
+    }
+  });
+
+  btnSkip.addEventListener('click', async () => {
+    if (!activeRoom) return;
+    try {
+      await api('/api/skip', { room: activeRoom });
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  // Enter key on URL input triggers Add
+  urlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') btnAdd.click();
+  });
+
+  // Delegate remove clicks inside queue list
+  queueList.addEventListener('click', async (e) => {
+    // just skip for now — full remove needs a queue index API
+    // this is Phase 2 territory
+  });
+
+  // Init
+  render();
+</script>
+</body>
+</html>
