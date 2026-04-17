@@ -20,8 +20,6 @@ async function getBaseArgs(): Promise<string[]> {
   const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
   if (cookiesFile) args.push('--cookies', cookiesFile);
 
-  args.push('--extractor-args', 'youtube:player_client=android');
-
   try {
     const { stdout } = await execFileAsync('yt-dlp', ['--version']);
     const year = parseInt(stdout.trim().split('.')[0], 10);

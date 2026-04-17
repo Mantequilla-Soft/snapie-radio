@@ -17,10 +17,6 @@ async function buildBaseArgs(): Promise<string[]> {
     args.push('--cookies', cookiesFile);
   }
 
-  // Use the Android player client — it bypasses YouTube's bot detection on VPS IPs
-  // without requiring cookies. Falls back gracefully on older yt-dlp versions.
-  args.push('--extractor-args', 'youtube:player_client=android');
-
   try {
     const { stdout } = await execFileAsync('yt-dlp', ['--version']);
     const year = parseInt(stdout.trim().split('.')[0], 10);
