@@ -37,7 +37,7 @@ Copy `.env.example` to `.env` and fill in your values:
 
 | Variable | Description |
 |---|---|
-| `HANGOUTS_API_URL` | URL of your Hive Hangouts middleware (auth + LiveKit tokens) |
+| `HANGOUTS_API_URL` | Hangouts API — defaults to `https://hangout-api.3speak.tv` |
 | `LIVEKIT_URL` | LiveKit server WebSocket URL (passed to the browser) |
 | `PORT` | HTTP port for the DJ console server (default: 3000) |
 | `YOUTUBE_COOKIES_FILE` | *(optional)* Path to a Netscape cookies file for YouTube auth |
