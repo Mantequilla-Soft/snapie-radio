@@ -6,17 +6,35 @@ import { logger } from '../utils/logger';
 
 const execFileAsync = promisify(execFile);
 
-// Args shared by all yt-dlp calls so JS challenges are solved
-const YT_DLP_BASE_ARGS = [
-  '--no-js-runtimes',
-  '--js-runtimes', `node:${process.execPath}`,
-  '--remote-components', 'ejs:github',
-];
+// Build base args depending on the installed yt-dlp version.
+// --no-js-runtimes / --js-runtimes were added in 2024; older builds don't know them.
+async function buildBaseArgs(): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync('yt-dlp', ['--version']);
+    const year = parseInt(stdout.trim().split('.')[0], 10);
+    if (year >= 2024) {
+      return [
+        '--no-js-runtimes',
+        '--js-runtimes', `node:${process.execPath}`,
+        '--remote-components', 'ejs:github',
+      ];
+    }
+  } catch { /* yt-dlp not found — will fail later with a clear message */ }
+  return []; // old version: no JS-runtime flags, falls back to yt-dlp defaults
+}
 
-function ytdlpJson(args: string[]): Promise<string> {
-  return execFileAsync('yt-dlp', [...YT_DLP_BASE_ARGS, ...args], {
-    maxBuffer: 10 * 1024 * 1024, // 10MB — large playlists can be verbose
-  }).then(({ stdout }) => stdout);
+let _baseArgs: string[] | null = null;
+async function getBaseArgs(): Promise<string[]> {
+  if (_baseArgs === null) _baseArgs = await buildBaseArgs();
+  return _baseArgs;
+}
+
+async function ytdlpJson(args: string[]): Promise<string> {
+  const base = await getBaseArgs();
+  const { stdout } = await execFileAsync('yt-dlp', [...base, ...args], {
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  return stdout;
 }
 
 export class YouTubeSource implements AudioSource {
@@ -68,8 +86,9 @@ export class YouTubeSource implements AudioSource {
     const url = `https://www.youtube.com/watch?v=${trackId}`;
     logger.info(`Spawning yt-dlp for track: ${trackId}`);
 
+    const base = await getBaseArgs();
     const proc = spawn('yt-dlp', [
-      ...YT_DLP_BASE_ARGS,
+      ...base,
       '-f', 'bestaudio',
       '-o', '-',         // stream to stdout
       '--no-playlist',
