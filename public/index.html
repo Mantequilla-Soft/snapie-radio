@@ -628,10 +628,16 @@ async function publishTrack(stream) {
 
 async function startCapture() {
   try {
+    // video: true required for broad browser compat; we discard the video track immediately
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: false,
-      audio: { echoCancellation: false, noiseSuppression: false, sampleRate: 48000 },
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false },
     });
+    stream.getVideoTracks().forEach(t => t.stop());
+    if (!stream.getAudioTracks().length) {
+      toast('No audio captured — pick a Tab and tick "Share tab audio"', true);
+      return;
+    }
     if (S.captureStream) stopCapture(false);
     S.captureStream = stream;
     stream.getAudioTracks()[0].addEventListener('ended', () => stopCapture(true));
@@ -672,6 +678,12 @@ function loadTrack(idx) {
   if (thumb) {
     $('art-img').src = thumb;
     $('ambient').style.backgroundImage = `url(${thumb})`;
+  }
+  if (t.isYouTube) {
+    window.open(t.sourceUrl, '_blank');
+    toast('YouTube opened in new tab — click Share Audio to broadcast it');
+    renderQueue();
+    return;
   }
   audio.src = `/stream?url=${encodeURIComponent(t.sourceUrl)}`;
   audio.load();
@@ -799,17 +811,39 @@ function renderQueue() {
 }
 
 // Add URL
+function isYouTubeUrl(url) {
+  return /youtube\.com|youtu\.be/i.test(url);
+}
+
+async function resolveYouTube(url) {
+  const r = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+  if (!r.ok) throw new Error('Could not resolve YouTube URL');
+  const d = await r.json();
+  const videoId = url.match(/[?&]v=([^&]+)/)?.[1] ?? url.match(/youtu\.be\/([^?]+)/)?.[1];
+  return [{
+    id: videoId,
+    title: d.title,
+    artist: d.author_name ?? 'YouTube',
+    duration: 0,
+    sourceUrl: url,
+    thumbnail: d.thumbnail_url,
+    isYouTube: true,
+  }];
+}
+
 async function addUrl() {
   const url = $('add-url').value.trim();
   if (!url) return;
   $('btn-add').disabled = true; $('btn-add').textContent = '…';
   try {
-    const pl = await apiFetch(`/api/playlist?url=${encodeURIComponent(url)}`);
+    const tracks = isYouTubeUrl(url)
+      ? await resolveYouTube(url)
+      : (await apiFetch(`/api/playlist?url=${encodeURIComponent(url)}`)).tracks;
     const wasEmpty = !S.queue.length;
-    S.queue.push(...pl.tracks);
-    toast(`Added ${pl.tracks.length} track${pl.tracks.length!==1?'s':''} — ${pl.title}`);
+    S.queue.push(...tracks);
+    toast(`Added ${tracks.length} track${tracks.length !== 1 ? 's' : ''}`);
     $('add-url').value = '';
-    if (wasEmpty) { loadTrack(0); await play(); }
+    if (wasEmpty) loadTrack(0);
     else renderQueue();
   } catch(e) { toast(e.message, true); }
   finally { $('btn-add').disabled = false; $('btn-add').textContent = '+ Add'; }
