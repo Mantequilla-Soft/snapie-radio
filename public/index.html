@@ -556,7 +556,10 @@ $('btn-join').addEventListener('click', async () => {
   $('btn-join').disabled = true;
   $('btn-join').innerHTML = '<span class="spinner"></span> Joining…';
   try {
-    const { token } = await apiFetch(`${CFG.hangoutsApiUrl}/rooms/${name}/join`, { method: 'POST', body: '{}' });
+    const { token } = await apiFetch(`${CFG.hangoutsApiUrl}/rooms/${name}/token`, {
+      method: 'POST',
+      body: JSON.stringify({ identity: S.username, displayName: S.username, isHost: true }),
+    });
     S.room = name;
     await connectLiveKit(token);
     $('topbar-room').textContent = name;
