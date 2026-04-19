@@ -20,12 +20,13 @@ async function getBaseArgs(): Promise<string[]> {
   const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
   if (cookiesFile) args.push('--cookies', cookiesFile);
 
+  args.push('--extractor-args', 'youtube:player_client=tv_embedded,web');
+
   try {
     const { stdout } = await execFileAsync('yt-dlp', ['--version']);
     const year = parseInt(stdout.trim().split('.')[0], 10);
     if (year >= 2024) {
       args.push(
-        '--no-js-runtimes',
         '--js-runtimes', `node:${process.execPath}`,
         '--remote-components', 'ejs:github',
       );
