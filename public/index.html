@@ -439,7 +439,7 @@
 
 <script type="module">
 import {
-  Room, LocalAudioTrack, Track, RoomEvent, ConnectionState,
+  Room, LocalAudioTrack, Track, RoomEvent, ParticipantEvent, ConnectionState,
 } from 'https://esm.sh/livekit-client@2';
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -556,10 +556,7 @@ $('btn-join').addEventListener('click', async () => {
   $('btn-join').disabled = true;
   $('btn-join').innerHTML = '<span class="spinner"></span> Joining…';
   try {
-    const { token } = await apiFetch(`${CFG.hangoutsApiUrl}/rooms/${name}/token`, {
-      method: 'POST',
-      body: JSON.stringify({ identity: S.username, displayName: S.username, isHost: true }),
-    });
+    const { token } = await apiFetch(`${CFG.hangoutsApiUrl}/rooms/${name}/join`, { method: 'POST', body: '{}' });
     S.room = name;
     await connectLiveKit(token);
     $('topbar-room').textContent = name;
@@ -577,6 +574,11 @@ async function connectLiveKit(token) {
     $('live-dot').classList.toggle('live', cs === ConnectionState.Connected);
   });
   await room.connect(CFG.livekitUrl, token);
+  room.localParticipant.on(ParticipantEvent.ParticipantPermissionsChanged, () => {
+    if (room.localParticipant.permissions?.canPublish && S.audioDest && !S.lkTrack) {
+      publishTrack(S.audioDest.stream);
+    }
+  });
 }
 
 function initAudio() {
@@ -599,10 +601,14 @@ async function publishTrack(stream) {
   const mt = stream.getAudioTracks()[0];
   if (!mt) return;
   const t = new LocalAudioTrack(mt);
-  await S.lkRoom.localParticipant.publishTrack(t, {
-    audioBitrate: 128_000, dtx: false, source: Track.Source.Microphone,
-  });
-  S.lkTrack = t;
+  try {
+    await S.lkRoom.localParticipant.publishTrack(t, {
+      audioBitrate: 128_000, dtx: false, source: Track.Source.Microphone,
+    });
+    S.lkTrack = t;
+  } catch {
+    // Not yet promoted — will auto-publish when host grants permissions
+  }
 }
 
 // ── Playback ─────────────────────────────────────────────────────────────────
