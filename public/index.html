@@ -238,6 +238,20 @@
       background: var(--accent); cursor: pointer; border: none;
     }
 
+    /* Broadcast button */
+    .btn-broadcast {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 15px; border: 1px solid var(--border);
+      border-radius: 20px; background: var(--surface);
+      color: var(--muted); font-size: 12px; font-weight: 600; font-family: inherit;
+      cursor: pointer; transition: all 0.2s; margin-left: 8px;
+    }
+    .btn-broadcast:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-broadcast.active { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.4); color: #ef4444; }
+    .broadcast-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    .btn-broadcast.active .broadcast-dot { animation: blink 1s ease-in-out infinite; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
     /* EQ bars */
     .eq-bars { display: flex; align-items: flex-end; gap: 3px; height: 20px; margin-left: 6px; opacity: 0; transition: opacity 0.3s; }
     .eq-bars.playing { opacity: 1; }
@@ -403,6 +417,10 @@
             <div class="eq-bar"></div><div class="eq-bar"></div>
             <div class="eq-bar"></div><div class="eq-bar"></div>
           </div>
+          <button class="btn-broadcast" id="btn-broadcast">
+            <span class="broadcast-dot"></span>
+            <span id="broadcast-label">Share Audio</span>
+          </button>
         </div>
 
         <div class="vol-row">
@@ -451,7 +469,7 @@ const CFG = window.SNAPIE_CONFIG ?? {
 // ── App state ───────────────────────────────────────────────────────────────
 const S = {
   username: null, jwt: null, room: null,
-  lkRoom: null, audioCtx: null, gainNode: null, audioDest: null, lkTrack: null,
+  lkRoom: null, audioCtx: null, gainNode: null, lkTrack: null, captureStream: null,
   queue: [], idx: -1, playing: false,
 };
 
@@ -575,8 +593,8 @@ async function connectLiveKit(token) {
   });
   await room.connect(CFG.livekitUrl, token);
   room.localParticipant.on(ParticipantEvent.ParticipantPermissionsChanged, () => {
-    if (room.localParticipant.permissions?.canPublish && S.audioDest && !S.lkTrack) {
-      publishTrack(S.audioDest.stream);
+    if (room.localParticipant.permissions?.canPublish && S.captureStream && !S.lkTrack) {
+      publishTrack(S.captureStream);
     }
   });
 }
@@ -585,14 +603,11 @@ function initAudio() {
   if (S.audioCtx) return;
   const ctx = new AudioContext({ sampleRate: 48000 });
   const gain = ctx.createGain();
-  const dest = ctx.createMediaStreamDestination();
   const src = ctx.createMediaElementSource(audio);
   src.connect(gain);
-  gain.connect(dest);
   gain.connect(ctx.destination);
   gain.gain.value = $('vol-slider').value / 100;
-  S.audioCtx = ctx; S.gainNode = gain; S.audioDest = dest;
-  publishTrack(dest.stream);
+  S.audioCtx = ctx; S.gainNode = gain;
 }
 
 async function publishTrack(stream) {
@@ -609,6 +624,41 @@ async function publishTrack(stream) {
   } catch {
     // Not yet promoted — will auto-publish when host grants permissions
   }
+}
+
+async function startCapture() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: false,
+      audio: { echoCancellation: false, noiseSuppression: false, sampleRate: 48000 },
+    });
+    if (S.captureStream) stopCapture(false);
+    S.captureStream = stream;
+    stream.getAudioTracks()[0].addEventListener('ended', () => stopCapture(true));
+    await publishTrack(stream);
+    setBroadcastUI(true);
+    toast('Broadcasting audio to room');
+  } catch(e) {
+    if (e.name !== 'NotAllowedError') toast('Could not capture audio: ' + e.message, true);
+  }
+}
+
+function stopCapture(fromTrackEnd = false) {
+  if (S.captureStream) {
+    S.captureStream.getTracks().forEach(t => t.stop());
+    S.captureStream = null;
+  }
+  if (S.lkTrack) {
+    S.lkRoom?.localParticipant.unpublishTrack(S.lkTrack);
+    S.lkTrack = null;
+  }
+  setBroadcastUI(false);
+  if (fromTrackEnd) toast('Audio sharing stopped');
+}
+
+function setBroadcastUI(active) {
+  $('btn-broadcast').classList.toggle('active', active);
+  $('broadcast-label').textContent = active ? 'Stop Sharing' : 'Share Audio';
 }
 
 // ── Playback ─────────────────────────────────────────────────────────────────
@@ -767,10 +817,17 @@ async function addUrl() {
 $('btn-add').addEventListener('click', addUrl);
 $('add-url').addEventListener('keydown', e => e.key === 'Enter' && addUrl());
 
+// Broadcast
+$('btn-broadcast').addEventListener('click', async () => {
+  if (!S.lkRoom) { toast('Join a room first', true); return; }
+  S.captureStream ? stopCapture() : await startCapture();
+});
+
 // Logout
 $('btn-logout').addEventListener('click', async () => {
   if (!confirm('Leave the room?')) return;
   stop();
+  stopCapture(false);
   if (S.lkRoom) { await S.lkRoom.disconnect(); S.lkRoom = null; }
   Object.assign(S, { username:null, jwt:null, room:null, queue:[], idx:-1, playing:false });
   show('login');

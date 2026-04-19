@@ -11,17 +11,11 @@ const PORT = Number(process.env.PORT ?? 3000);
 
 // ── yt-dlp base args (cached singleton) ───────────────────────────────────────
 
-let _baseArgs: string[] | null = null;
+let _staticArgs: string[] | null = null;
 
-async function getBaseArgs(): Promise<string[]> {
-  if (_baseArgs !== null) return _baseArgs;
-  const args: string[] = [];
-
-  const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
-  if (cookiesFile) args.push('--cookies', cookiesFile);
-
-  args.push('--extractor-args', 'youtube:player_client=tv_embedded,web');
-
+async function getStaticArgs(): Promise<string[]> {
+  if (_staticArgs !== null) return _staticArgs;
+  const args: string[] = ['--extractor-args', 'youtube:player_client=tv_embedded,web'];
   try {
     const { stdout } = await execFileAsync('yt-dlp', ['--version']);
     const year = parseInt(stdout.trim().split('.')[0], 10);
@@ -32,9 +26,15 @@ async function getBaseArgs(): Promise<string[]> {
       );
     }
   } catch { /* yt-dlp not found — will fail at request time with a clear error */ }
-
-  _baseArgs = args;
+  _staticArgs = args;
   return args;
+}
+
+async function getBaseArgs(): Promise<string[]> {
+  const staticArgs = await getStaticArgs();
+  const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
+  const cookiesArgs = cookiesFile ? ['--cookies', cookiesFile] : [];
+  return [...cookiesArgs, ...staticArgs];
 }
 
 // ── Static files ──────────────────────────────────────────────────────────────
