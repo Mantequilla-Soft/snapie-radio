@@ -7,6 +7,9 @@
       "autorestart": true,
       "watch": false,
       "max_memory_restart": "512M",
+      "env": {
+        "YOUTUBE_COOKIES_FILE": "/opt/snapie-radio/cookies.txt"
+      },
       "env_file": ".env",
       "error_log": "logs/error.log",
       "out_log": "logs/out.log",
